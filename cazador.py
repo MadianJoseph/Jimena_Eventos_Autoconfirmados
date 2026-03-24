@@ -85,7 +85,7 @@ def analizar_filtros(info, titulo_card):
             return True, "PEPSI CENTER (Auto)", True
 
     # --- 2. ALFREDO HARP HELU (DIABLOS) ---
-    if "ALFREDO HARP HELU" in todo_texto or "DIABLOS" in todo_texto:
+    if "ESTADIO ALFREDO HARP HELU (DIABLOS)" in todo_texto or "DIABLOS" in todo_texto:
         if turnos == "1" and puesto in ["SEGURIDAD", "LOCAL CREW", "BOLETAJE"]:
             if puesto != "ACOMODADOR EE": # Refuerzo de seguridad
                 return True, "DIABLOS (Auto)", True
