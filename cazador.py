@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 # ================= CONFIGURACIÓN =================
 URL_LOGIN = "https://eventossistema.com.mx/login.html"
 URL_EVENTS = "https://eventossistema.com.mx/confirmaciones/default.html"
-CHECK_INTERVAL = 90 
+CHECK_INTERVAL = 60 
 TZ = pytz.timezone("America/Mexico_City")
 
 USER = os.getenv("WEB_USER")
