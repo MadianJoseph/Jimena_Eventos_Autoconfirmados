@@ -3,7 +3,7 @@ import requests
 import threading
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from flask import Flask
 from playwright.sync_api import sync_playwright
@@ -19,11 +19,14 @@ PASS = os.getenv("WEB_PASS")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Memoria para el Estadio Ciudad de los Deportes (Máximo 5 avisos)
+HISTORIAL_CD_DEPORTES = {} 
+
 app = Flask(__name__)
 
 @app.route("/")
 def home(): 
-    return f"Bot Asistente Jimena V4.2 - Online - {datetime.now(TZ).strftime('%H:%M:%S')}"
+    return f"Bot Jimena V4.3 - Resumen Unificado - {datetime.now(TZ).strftime('%H:%M:%S')}"
 
 def send(msg):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
@@ -72,79 +75,73 @@ def analizar_filtros(info, titulo_card):
     todo_texto = (titulo + info['indicaciones'] + lugar).upper()
     ahora = datetime.now(TZ)
 
-    # --- 1. PEPSI CENTER WTC (Añadido LOCAL CREW) ---
+    # --- 0. FILTROS DE EXCLUSIÓN Y LÍMITE ---
+    if "ESTADIO AZTECA" in todo_texto or "AZTECA" in todo_texto:
+        return False, "Bloqueado", False
+
+    if "CIUDAD DE LOS DEPORTES" in todo_texto:
+        key = f"{titulo}_{puesto}_{turnos}"
+        veces = HISTORIAL_CD_DEPORTES.get(key, 0)
+        if veces >= 5:
+            return False, "Límite 5 mensajes", False
+        HISTORIAL_CD_DEPORTES[key] = veces + 1
+        return True, "CD Deportes (Limitado)", False
+
+    # --- 1. PEPSI CENTER ---
     if "PEPSI CENTER" in todo_texto:
         if puesto in ["SEGURIDAD", "BOLETAJE", "ACOMODADOR EE", "LOCAL CREW"]:
-            return True, "PEPSI CENTER (Auto)", True
+            return True, "PEPSI (Auto)", True
 
-    # --- 2. ALFREDO HARP HELU (DIABLOS) ---
+    # --- 2. DIABLOS (ALFREDO HARP HELU) ---
     if "ALFREDO HARP" in todo_texto or "DIABLOS" in todo_texto:
         if turnos == "1" and puesto in ["SEGURIDAD", "LOCAL CREW", "BOLETAJE"]:
             if "ACOMODADOR" not in puesto: 
                 return True, "DIABLOS (Auto)", True
 
-    # --- 3. CCXP - CENTRO BANAMEX ---
+    # --- 3. CCXP ---
     if "CCXP" in todo_texto or "CENTRO BANAMEX" in todo_texto:
         es_nocturna = (mins >= 1170 or mins <= 450)
         if es_nocturna: return True, "CCXP Nocturna (Manual)", False
-        
         if puesto in ["SEGURIDAD", "LOCAL CREW"]:
             fecha_str = info['fecha_dt'].strftime("%d/%m") if info['fecha_dt'] else ""
-            if "23/04" in fecha_str and turnos == "1" and mins == 930:
-                return True, "CCXP 23/04 Prioridad (Auto)", True
-            elif "24/04" in fecha_str and turnos == "1.5" and mins == 570:
-                return True, "CCXP 24/04 (Auto)", True
-            elif "25/04" in fecha_str and turnos == "1.5" and mins == 540:
-                return True, "CCXP 25/04 (Auto)", True
-            elif "26/04" in fecha_str and turnos == "1.5" and mins == 510:
-                return True, "CCXP 26/04 (Auto)", True
+            if ("23/04" in fecha_str and turnos == "1") or (("24/04" in fecha_str or "25/04" in fecha_str or "26/04" in fecha_str) and turnos == "1.5"):
+                return True, "CCXP (Auto)", True
 
-    # --- 4. ESTADIO GNP (Regla 80 horas) ---
+    # --- 4. ESTADIO GNP ---
     if "ESTADIO GNP" in todo_texto:
-        if any(x in todo_texto for x in ["OVG", "ACREDITACIONES", "ACREDITACION"]):
-            return True, "GNP (OVG/Acred - Manual)", False
-        
-        if (turnos == "1.5" and puesto == "SEGURIDAD") or (turnos == "1" and puesto == "BOLETAJE"):
-            es_nocturna = (mins >= 1170 or mins <= 450)
-            if es_nocturna and info['fecha_dt']:
-                diferencia = info['fecha_dt'] - ahora
-                horas_dif = diferencia.total_seconds() / 3600
-                if horas_dif >= 80:
-                    return True, f"GNP Nocturna >80h ({int(horas_dif)}h) - Auto", True
-                else:
-                    return True, f"GNP Nocturna <80h ({int(horas_dif)}h) - Manual", False
-            elif not es_nocturna:
-                return True, "GNP Normal (Auto)", True
+        if not any(x in todo_texto for x in ["OVG", "ACREDITACIONES"]):
+            if (turnos == "1.5" and puesto == "SEGURIDAD") or (turnos == "1" and puesto == "BOLETAJE"):
+                es_nocturna = (mins >= 1170 or mins <= 450)
+                if not es_nocturna: return True, "GNP (Auto)", True
+                elif info['fecha_dt'] and (info['fecha_dt'] - ahora).total_seconds() / 3600 >= 80:
+                    return True, "GNP Noct. >80h (Auto)", True
 
-    # --- 5. PALACIO DE LOS DEPORTES ---
-    if "PALACIO DE LOS DEPORTES" in todo_texto:
-        if 840 <= mins <= 960: # 14:00 - 16:00
-            if turnos == "1" and puesto in ["SEGURIDAD", "BOLETAJE", "ACOMODADOR EE"]:
-                return True, "PALACIO (Auto)", True
-
-    return True, "Evento Nuevo (Revisión Manual)", False
+    return True, "Nuevo Disponible", False
 
 def run_once():
+    global HISTORIAL_CD_DEPORTES
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
             context = browser.new_context(user_agent="Mozilla/5.0...")
             page = context.new_page()
 
-            page.goto(URL_LOGIN, wait_until="networkidle", timeout=60000)
+            page.goto(URL_LOGIN, wait_until="networkidle")
             page.fill("input[name='usuario']", USER)
             page.fill("input[name='password']", PASS)
             page.click("button[type='submit']")
             page.wait_for_timeout(3000)
 
-            page.goto(URL_EVENTS, wait_until="domcontentloaded", timeout=60000)
+            page.goto(URL_EVENTS, wait_until="domcontentloaded")
             page.wait_for_timeout(2000)
             
             cards = page.query_selector_all(".card.border")
-            for card in cards:
-                if card.evaluate("(node) => node.closest('#div_eventos_confirmados') !== null"):
-                    continue
+            eventos_resumen = []
+            vistos_ahora = set()
 
+            for card in cards:
+                if card.evaluate("(node) => node.closest('#div_eventos_confirmados') !== null"): continue
+                
                 titulo_elem = card.query_selector("h6 a")
                 if not titulo_elem: continue
                 titulo_texto = titulo_elem.inner_text().strip()
@@ -157,16 +154,28 @@ def run_once():
                     info = extraer_datos_tabla(tabla.inner_html())
                     interesa, motivo, auto = analizar_filtros(info, titulo_texto)
 
+                    if not interesa: continue
+
                     if auto:
                         btn = card.query_selector("button:has-text('CONFIRMAR')")
                         if btn:
                             btn.click()
                             page.wait_for_timeout(2500)
-                            send(f"🎯 *CONFIRMADO:* {titulo_texto}\n👤 Puesto: {info['puesto']}\n✅ Filtro: {motivo}")
+                            send(f"🎯 *CONFIRMADO:* {titulo_texto}\n👤 {info['puesto']} | {motivo}")
                         else:
-                            send(f"⚠️ *AVISO:* Criterios OK para {titulo_texto} pero botón no hallado.")
+                            eventos_resumen.append(f"⚠️ *BOTÓN NO HALLADO:* {titulo_texto}")
                     else:
-                        send(f"🔔 *NUEVO EVENTO:* {titulo_texto}\n👉 Puesto: {info['puesto']}\n(Manual)")
+                        emoji = "⚽" if "CD Deportes" in motivo else "🔔"
+                        hora = f"{info['mins_entrada']//60:02d}:{info['mins_entrada']%60:02d}"
+                        eventos_resumen.append(f"{emoji} *{titulo_texto}*\n└ {info['puesto']} | {info['turnos']}T | {hora}")
+                    
+                    vistos_ahora.add(f"{titulo_texto}_{info['puesto']}_{info['turnos']}")
+
+            # Reiniciar contadores de eventos que ya desaparecieron
+            HISTORIAL_CD_DEPORTES = {k: v for k, v in HISTORIAL_CD_DEPORTES.items() if k in vistos_ahora}
+
+            if eventos_resumen:
+                send("📋 *RESUMEN DE EVENTOS*\n\n" + "\n\n".join(eventos_resumen))
             
             browser.close()
     except Exception as e:
